@@ -1,10 +1,7 @@
-// Magic Ticket
+// Magic Ticket 1.0 (12/4/2013)
 // By Rachel Cantor (https://plus.google.com/+RachelCantor)
-// With support from Control Group (http://www.controlgroup.com)
-// 1.0 (12/4/2013)
-// More info (http://blog.controlgroup.com/2013/12/05/connecting-zendesk-google-spreadsheets-using-google-apps-script)
-// Many thanks to Romain Vialard for the guidance his 'Add reminder' Google Apps Script provided in creating this script.
-// Many thanks to Arun Nagarajan as well. His Google OAuth2 gists on GitHub were extremely helpful for this first time OAuthor!
+// More info (http://blog.controlgroup.com/2013/12/08/connecting-zendesk-google-spreadsheets-using-google-apps-script)
+// File issues, feature requests, and contribute on the GitHub repo (https://github.com/rachelslurs/magic-ticket)
 
 var ss = SpreadsheetApp.getActiveSpreadsheet();
 
