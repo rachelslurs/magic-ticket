@@ -1,170 +1,187 @@
-// Magic Ticket
-// By Rachel Cantor (https://plus.google.com/+RachelCantor)
-// With support from Control Group (http://www.controlgroup.com)
-// 1.0 (12/4/2013)
-// More info (http://blog.controlgroup.com/2013/12/05/connecting-zendesk-google-spreadsheets-using-google-apps-script)
 // Many thanks to Romain Vialard for the guidance his 'Add reminder' Google Apps Script provided in creating this script.
 // Many thanks to Arun Nagarajan as well. His Google OAuth2 gists on GitHub were extremely helpful for this first time OAuthor!
 
-var ss = SpreadsheetApp.getActiveSpreadsheet();
+// this is the user property where we'll store the token, make sure this is unique across all user properties across all scripts
+var tokenPropertyName = 'oAuthToken'; 
 
-function onInstall() {
-  onOpen();
-}
-
-function onOpen() {
-  var menuEntries = 
-    [{
-      name: "Settings",
-      functionName: "setPreferencesUI"
-    },
-     {
-       name:"Run Magic Ticket",
-       functionName: "dateChecker"
-     }];
-  ss.addMenu("Magic Ticket", menuEntries);
-}
-
-function setup() {
-  
-  // trying to avoid making users open script editor to save a version > deploy as web app
-  // not working yet
-  
-  var url = "";
-  try {
-    ScriptApp.getService().enable(ScriptApp.getService().Restriction.MYSELF);
-    url = ScriptApp.getService().getUrl();
-    Browser.msgBox("Your web app is now accessible at the following URL:\n"
-                   + url);
-  } catch (e) {
-    Browser.msgBox("Script authorization expired.\nPlease run it again.");
-    ScriptApp.invalidateAuth();
-  }  
-}
-
-function setPreferencesUI() {
-  var app = UiApp.createApplication().setTitle('Magic Ticket Settings').setHeight(430);
-  var mainPanel = app.createVerticalPanel().setWidth('100%');
-  var settingsPanel = app.createVerticalPanel().setId('settingsPanel');
-  var settingsGrid = app.createGrid(7, 2).setCellSpacing(20).setWidth('100%');
-  var buttonPanel = app.createHorizontalPanel().setWidth('100%');
-  var buttonAlign = app.createHorizontalPanel().setSpacing(10).setStyleAttribute('paddingTop', '20px');
-  var close = app.createButton('Close', app.createServerHandler('closeApp_')).setWidth(100);
-  var properties = ScriptProperties.getProperty('userSettings');
-  // is this still necessary?
-  // var user = Session.getEffectiveUser().getEmail();
-  
-  settingsPanel.add(settingsGrid);
-  buttonPanel.add(buttonAlign);
-  buttonPanel.setCellHorizontalAlignment(buttonAlign, UiApp.HorizontalAlignment.CENTER);
-  settingsPanel.add(buttonPanel);
-  mainPanel.add(settingsPanel);
-  app.add(mainPanel);
-  
-  if (properties != null){
-    properties = Utilities.jsonParse(properties);
+function doGet(e) {
+  var HTMLToOutput;
+  if(e.parameters.code){
+    // if we get 'code' as a parameter in, then this is a callback.
+    getAndStoreAccessToken(e.parameters.code);
+    HTMLToOutput = '<html><h1>Finished with oAuth</h1></html>';
   }
-  settingsGrid.setWidget(0, 0, app.createLabel('Select sheet:'));
-  settingsGrid.setWidget(1, 0, app.createLabel('Check dates in column(s): (A, B,...)'));
-  settingsGrid.setWidget(2, 0, app.createLabel('Open a ticket'));
-  settingsGrid.setWidget(3, 0, app.createLabel('Client Name/ID:'));
-  settingsGrid.setWidget(4, 0, app.createLabel('Client Secret:'));
-  settingsGrid.setWidget(5, 0, app.createLabel('Zendesk URL:'));
-  settingsGrid.setWidget(6, 0, app.createLabel('Redirect URL:'));
+  else if(isTokenValid()){
+    // if we already have a valid token, go off and start working with data
+    HTMLToOutput = '<html><h1>Already have token</h1></html>';
+  }
+  else {
+    // we are starting from scratch or resetting
+    return HtmlService.createHtmlOutput("<html><h1>Lets start with oAuth</h1><a href='"+ getURLForAuthorization() + "'>click here to start</a></html>");
+  }
+  HTMLToOutput += getData();
+  return HtmlService.createHtmlOutput(HTMLToOutput);
+}
+
+// check to see if we have a token
+function getData(){
+  var properties = ScriptProperties.getProperty('userSettings');
+  properties = Utilities.jsonParse(properties);
+  var zdURL = properties.zdURL;
+  var getDataURL = 'https://' + zdURL + '/api/v2/oauth/tokens/current.json';
+  var dataResponse = UrlFetchApp.fetch(getDataURL,getUrlFetchOptions()).getContentText();  
+  return dataResponse;
+}
+
+function getUrlFetchOptions() {
+  var token = UserProperties.getProperty(tokenPropertyName);
+  return {
+    "contentType" : "application/json",
+    "headers" : {
+      "Authorization" : "Bearer " + token,
+      "Accept" : "application/json"
+    }
+  };
+}
+
+function postData(){
+  var properties = ScriptProperties.getProperty('userSettings');
+  properties = Utilities.jsonParse(properties);
+  var zdURL = properties.zdURL;
+  var postDataURL = "https://" + zdURL + "/api/v2/tickets.json";
+  var dataResponse = UrlFetchApp.fetch(postDataURL,postUrlFetchOptions()).getContentText();  
+  return dataResponse;
+}
+
+function postUrlFetchOptions(message) {
+  var token = UserProperties.getProperty(tokenPropertyName);
+  var str = '"';
+    for (var i = 0; i < message[0].length; i++) {
+      str +=  message[0][i] + ": " + message[1][i] + " ";
+    }
+  str += '"';
+  var options = 
+      { "method": "post",
+       "contentType" : "application/json",
+    "headers": { "Authorization": "Bearer " + token, "Accept" : "application/json" },
+    "payload": '{"ticket":{"subject":"Magic Ticket", "comment": { "body": ' + str + ' }, "priority": "urgent", "group_id": "20643765", "type": "task" }}'
+      }
+  return options;
+}
+
+// this is the URL where they'll authorize with zendesk.com
+// may need to add a 'scope' param here.
+// example scope for google - https://www.googleapis.com/plus/v1/activities
+
+function getURLForAuthorization(){
+  var properties = ScriptProperties.getProperty('userSettings');
+  properties = Utilities.jsonParse(properties);
+  var zdURL = properties.zdURL;
+  var clientName = properties.clientName;
+  var rURL = ScriptApp.getService().getUrl();
+  var authorizeURL = 'https://' + zdURL + '/oauth/authorizations/new'; //step 1. we can actually start directly here if that is necessary
+  return authorizeURL + '?response_type=code&client_id='+ clientName + '&redirect_uri='+ rURL +
+    '&scope=read%20write';  
+}
+
+function getAndStoreAccessToken(code){
+  var properties = ScriptProperties.getProperty('userSettings');
+  properties = Utilities.jsonParse(properties);
+  var zdURL = properties.zdURL;
+  var tokenURL = 'https://' + zdURL + '/oauth/tokens'; //step 2. after we get the callback, go get token
+  var clientName = properties.clientName;
+  var clientSecret= properties.clientSecret;
+  var rURL= ScriptApp.getService().getUrl();
+  var parameters = {
+    method : 'post',
+    payload : 'client_id='+ clientName +'&client_secret=' + clientSecret + '&grant_type=authorization_code&redirect_uri=' + rURL + '&code=' + code + '&scope=read'
+  };
+  var response = UrlFetchApp.fetch(tokenURL,parameters).getContentText();   
+  var tokenResponse = JSON.parse(response);
+  // store the token for later retrieval
+  UserProperties.setProperty(tokenPropertyName, tokenResponse.access_token);
+  //reset token option?
+}
+
+function isTokenValid() {
+  var token = UserProperties.getProperty(tokenPropertyName);
+  if(!token){ //if its empty or undefined
+    return false;
+  }
+  return true; //naive check
   
-  var sheetList = app.createListBox().setName('sheet');
-  var sheets = ss.getSheets();
-  for (var i = 0; i < sheets.length; i++) {
-    var sheetName = sheets[i].getName();
-    var item = sheetList.addItem(sheetName);
-    if (properties != null && sheetName == properties.sheet) {
-      sheetList.setSelectedIndex(i);
+  //if your API has a more fancy token checking mechanism, use it. for now we just check to see if there is a token. 
+  /*
+  var responseString;
+  try{
+  responseString = UrlFetchApp.fetch(BASE_URI+'/api/rest/system/session/check',getUrlFetchOptions(token)).getContentText();
+  }catch(e){ //presumably an HTTP 401 will go here
+  return false;
+  }
+  if(responseString){
+  var responseObject = JSON.parse(responseString);
+  return responseObject.authenticated;
+  }
+  return false;*/
+}
+
+function dateChecker(e) {
+  var properties = ScriptProperties.getProperty('userSettings');
+  properties = Utilities.jsonParse(properties);
+  var zdURL = properties.zdURL;
+  var postDataURL = "https://" + zdURL + "/api/v2/tickets.json";
+  var doc = SpreadsheetApp.getActiveSpreadsheet();
+  var properties = ScriptProperties.getProperty('userSettings');
+  var logSheet = doc.getSheetByName('Log');
+  if (properties != null) {
+    properties = Utilities.jsonParse(properties);
+    var sheet = doc.getSheetByName(properties.sheet);
+    var lastRow = sheet.getLastRow();
+    var data = sheet.getDataRange().getValues();
+    var dateColumns = properties.dateColumn.replace(/\s/g, '').split(',');
+    for (var r = 0; r < dateColumns.length; r++) {
+      var dates = sheet.getRange(dateColumns[r] + '1:' + dateColumns[r] + lastRow.toString()).getValues();
+      var comments = sheet.getRange(dateColumns[r] + '1:' + dateColumns[r] + lastRow.toString()).getComments();
+      for (var i = 1; i < dates.length; i++) {
+        var rowResp = [];
+        if (comments[i][0] != 'ticket sent') {
+          var expiry_date = new Date(dates[i][0]);
+          var today = new Date();
+          var reminder = properties.reminderTime * 24 * 3600 * 1000;
+          if (reminder > 0 && expiry_date.getTime() - today.getTime() < reminder || reminder < 0 && expiry_date.getTime() - today.getTime() < reminder)
+          {
+            try {
+              var dataResponse = UrlFetchApp.fetch(postDataURL,postUrlFetchOptions([data[0], data[i]])); 
+              var logResponse=dataResponse.getContentText();
+              Logger.log(dataResponse);
+              sheet.getRange(dateColumns[r] + (i + 1).toString()).setComment('ticket sent');
+              var parseResponse = JSON.parse(logResponse);
+              var respCode = dataResponse.getResponseCode();
+              if (respCode == 201) // success!
+              {
+                logSheet.insertRowAfter(1);
+                rowResp = [new Date(),parseResponse.ticket["id"], parseResponse.ticket["url"]];
+                logSheet.getRange(2, 1, 1, 3).setValues([rowResp]);
+              }
+            } catch(e) {
+              // que problemo?
+              {
+                var rowResp = [new Date(),"Error",e.message];
+              }
+            }
+          }
+          else
+          {
+            rowResp = [new Date(),"Script finished","No other tickets needed to be created."];
+          }
+        }
+        
+      }
+      if (doc.getSheetByName('Log')) 
+          {
+            logSheet.insertRowAfter(1);
+            logSheet.getRange(2, 1, 1, 3).setValues([rowResp]);
+          }
     }
   }
-  var dateColumn = app.createTextBox().setName('dateColumn').setWidth('30');
-  var reminderTime = app.createTextBox().setName('reminderTime').setWidth('30');
-  var clientName = app.createTextBox().setName('clientName').setWidth('100%');
-  var clientSecret = app.createTextBox().setName('clientSecret').setWidth('100%');
-  var zdURL = app.createTextBox().setName('zdURL').setWidth('100%');
-  var rURL = app.createTextBox().setReadOnly(true).setText(ScriptApp.getService().getUrl()).setWidth('100%');
-  if (properties != null) {
-    dateColumn.setText(properties.dateColumn);
-    reminderTime.setText(properties.reminderTime);
-    clientName.setText(properties.clientName);
-    clientSecret.setText(properties.clientSecret);
-    zdURL.setText(properties.zdURL);
-  }
-  settingsGrid.setWidget(0, 1, sheetList);
-  settingsGrid.setWidget(1, 1, dateColumn);
-  settingsGrid.setWidget(2, 1, app.createHorizontalPanel().add(reminderTime).add(app.createLabel('days before date is reached.').setStyleAttribute('marginLeft', '10px')));
-  settingsGrid.setWidget(3, 1, clientName);
-  settingsGrid.setWidget(4, 1, clientSecret);
-  settingsGrid.setWidget(5, 1, zdURL);
-  settingsGrid.setWidget(6, 1, rURL);
-  var record = app.createButton("Save", app.createServerHandler('saveProperties_').addCallbackElement(settingsGrid)).setEnabled(true);
-  buttonAlign.add(record.setWidth(100));
-  if (properties != null) {
-    var resetReminder = app.createButton("Reset", app.createServerHandler('resetProperties_'));
-    buttonAlign.add(resetReminder);
-  }
-  buttonAlign.add(close);
-  
-  // need to add validator for Zendesk URL
-  
-  var handlerOk = app.createClientHandler().validateMatches(dateColumn, "^[a-zA-Z,]{1,}$").validateRange(reminderTime, 1, null);
-  handlerOk.forTargets(dateColumn, reminderTime).setStyleAttribute('color', 'black');
-  handlerOk.forTargets(record).setEnabled(true);
-  var handlerDateColumnOk = app.createClientHandler().validateMatches(dateColumn, "^[a-zA-Z,]{1,}$");
-  handlerDateColumnOk.forEventSource().setStyleAttribute('color', 'black');
-  var handlerDateColumnNok = app.createClientHandler().validateNotMatches(dateColumn, "^[a-zA-Z,]{1,}$");
-  handlerDateColumnNok.forEventSource().setStyleAttribute('color', 'red');
-  handlerDateColumnNok.forTargets(record).setEnabled(false);
-  var handlerTimeOk = app.createClientHandler().validateRange(reminderTime, 1, null);
-  handlerTimeOk.forEventSource().setStyleAttribute('color', 'black');
-  var handlerTimeNok = app.createClientHandler().validateNotRange(reminderTime, 1, null);
-  handlerTimeNok.forEventSource().setStyleAttribute('color', 'red');
-  handlerTimeNok.forTargets(record).setEnabled(false);
-  
-  dateColumn.addKeyUpHandler(handlerOk).addKeyUpHandler(handlerDateColumnOk).addKeyUpHandler(handlerDateColumnNok);
-  reminderTime.addKeyUpHandler(handlerOk).addKeyUpHandler(handlerTimeOk).addKeyUpHandler(handlerTimeNok);
-  record.addClickHandler(app.createClientHandler().forEventSource().setEnabled(false).forTargets(close).setEnabled(false));
-  
-  ss.show(app);
-}
-
-function closeApp_() {
-  var app = UiApp.getActiveApplication();
-  app.close();
-  return app;
-}
-
-function resetProperties_(e) {
-  var app = UiApp.getActiveApplication();
-  ScriptProperties.deleteAllProperties();
-  var panel = app.getElementById('settingsPanel').clear();
-  var info = app.createLabel('Settings reset.').setStyleAttribute('paddingBottom', '20px');
-  panel.add(info).setCellHorizontalAlignment(info, UiApp.HorizontalAlignment.CENTER).setStyleAttribute('paddingTop', '50px').setWidth('100%');
-  var currentTriggers = ScriptApp.getScriptTriggers();
-  for (i in currentTriggers) {
-    ScriptApp.deleteTrigger(currentTriggers[i]);
-  }
-  var button = app.createButton('Close', app.createServerHandler('closeApp_')).setWidth(100);
-  panel.add(button).setCellHorizontalAlignment(button, UiApp.HorizontalAlignment.CENTER);
-  return app;
-}
-
-function saveProperties_(e) {
-  var app = UiApp.getActiveApplication();
-  ScriptProperties.setProperty('userSettings', Utilities.jsonStringify(e.parameter));
-  var panel = app.getElementById('settingsPanel').clear();
-  var info = app.createLabel('Settings saved!').setStyleAttribute('paddingBottom', '20px');
-  panel.add(info).setCellHorizontalAlignment(info, UiApp.HorizontalAlignment.CENTER).setStyleAttribute('padding', '50px').setWidth('100%');
-  var currentTriggers = ScriptApp.getScriptTriggers();
-  for (i in currentTriggers) {
-    ScriptApp.deleteTrigger(currentTriggers[i]);
-  }
-  ScriptApp.newTrigger('dateChecker').timeBased().everyDays(1).atHour(7).create();
-  var button = app.createButton('Close', app.createServerHandler('closeApp_')).setWidth(100);
-  panel.add(button).setCellHorizontalAlignment(button, UiApp.HorizontalAlignment.CENTER);
-  return app;
 }
